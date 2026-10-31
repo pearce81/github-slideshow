@@ -1,8 +1,8 @@
 """Print the reports on your computer, without the bot.
 
     py report.py                         # top parts for 24h, 7 days, 30 days, this month
-    py report.py top 7d                  # most asked in the last 7 days (top 10)
-    py report.py top month 20            # top 20 this month
+    py report.py top 7d                  # most asked in the last 7 days (top 50)
+    py report.py top month 100           # top 100 this month
     py report.py count today             # number of messages
     py report.py part 86511-2S000 30d    # how often one part was asked
     py report.py export month            # save a CSV file (opens in Excel)
@@ -22,6 +22,7 @@ from periods import PeriodError, parse_period
 from storage import Storage
 
 TZ = ZoneInfo(os.environ.get("TIMEZONE", "UTC"))
+TOP_N = int(os.environ.get("TOP_N", "50"))  # how many part numbers each list shows
 
 
 def pick_chat(db: Storage) -> int:
@@ -53,12 +54,12 @@ def main(argv: list[str]) -> None:
     if cmd == "report":
         for key in ("24h", "7d", "30d", "month"):
             start, end, label, _ = parse_period([key], now)
-            print_top(db.top_parts(chat_id, start, end, 10), label)
+            print_top(db.top_parts(chat_id, start, end, TOP_N), label)
             s = db.summary(chat_id, start, end)
             print(f"  ({s['messages']} messages, {s['part_mentions']} part requests)")
     elif cmd == "top":
         start, end, label, rest = parse_period(args, now)
-        limit = int(rest[0]) if rest and rest[0].isdigit() else 10
+        limit = int(rest[0]) if rest and rest[0].isdigit() else TOP_N
         print_top(db.top_parts(chat_id, start, end, limit), label)
     elif cmd == "count":
         start, end, label, _ = parse_period(args, now)
