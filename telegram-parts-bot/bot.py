@@ -21,6 +21,8 @@ from periods import PERIOD_HELP, PeriodError, parse_period
 from storage import Storage
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
+# httpx logs every request URL, which contains the bot token.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("parts-bot")
 
 
