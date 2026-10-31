@@ -4,6 +4,7 @@ Run:  TELEGRAM_BOT_TOKEN=... python bot.py
 See README.md for setup (the bot's privacy mode must be disabled).
 """
 
+import asyncio
 import csv
 import io
 import logging
@@ -228,6 +229,8 @@ def main() -> None:
     # Every non-service group message, including edits (edits re-extract part numbers).
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.StatusUpdate.ALL, record_message))
     log.info("Bot started (db=%s, tz=%s)", DB_PATH, TZ)
+    # Python 3.14+ no longer creates a default event loop; run_polling expects one.
+    asyncio.set_event_loop(asyncio.new_event_loop())
     app.run_polling(allowed_updates=["message", "edited_message"])
 
 
