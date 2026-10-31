@@ -13,15 +13,62 @@ Needs API_ID and API_HASH from https://my.telegram.org -> API development tools.
 import argparse
 import asyncio
 import os
+import urllib.request
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlsplit
 
-from telethon import TelegramClient, utils
+from telethon import TelegramClient, connection, utils
 from telethon.tl.types import MessageService
 
 from parts import extract_part_numbers
 from storage import Storage
 
 BATCH = 500
+
+
+def proxy_settings(value: str | None) -> tuple[dict, str]:
+    """TelegramClient proxy kwargs and a description, from PROXY or the system proxy.
+
+    value: "socks5://host:port", "http://host:port", a Telegram MTProto proxy link
+    (tg://proxy?server=..&port=..&secret=.. or https://t.me/proxy?...), "none", or
+    empty to use the Windows/system proxy that VPN apps set, if any.
+    """
+    if value and value.strip().lower() == "none":
+        return {}, "no proxy"
+    if not value:
+        system = urllib.request.getproxies()
+        value = system.get("socks") or system.get("https") or system.get("http")
+        if not value:
+            return {}, "no proxy"
+        if value.startswith("socks://"):
+            value = "socks5://" + value[len("socks://"):]
+    value = value.strip()
+
+    url = urlsplit(value if "://" in value else "http://" + value)
+    if "secret=" in url.query:  # tg://proxy?... or https://t.me/proxy?...
+        q = {k: v[0] for k, v in parse_qs(url.query).items()}
+        secret = q["secret"]
+        if secret.lower().startswith("ee"):
+            raise SystemExit(
+                "This MTProto proxy uses a 'fake TLS' secret (starts with ee), which this program "
+                "can't use. Use a proxy whose secret starts with dd, or your VPN's SOCKS/HTTP proxy."
+            )
+        return (
+            {
+                "connection": connection.ConnectionTcpMTProxyRandomizedIntermediate,
+                "proxy": (q["server"], int(q["port"]), secret),
+            },
+            f"MTProto proxy {q['server']}:{q['port']}",
+        )
+
+    kind = {"socks5": "socks5", "socks5h": "socks5", "socks": "socks5", "socks4": "socks4",
+            "http": "http", "https": "http"}.get(url.scheme.lower())
+    if not kind or not url.hostname or not url.port:
+        raise SystemExit(f"Can't understand PROXY '{value}'. Example: socks5://127.0.0.1:10808")
+    proxy = {"proxy_type": kind, "addr": url.hostname, "port": url.port, "rdns": True}
+    if url.username:
+        proxy.update(username=url.username, password=url.password)
+    return {"proxy": proxy}, f"{kind} proxy {url.hostname}:{url.port}"
 
 
 def to_row(chat_id, msg):
@@ -92,9 +139,12 @@ async def main() -> None:
     if not api_id or not api_hash:
         raise SystemExit("Set API_ID and API_HASH (from https://my.telegram.org -> API development tools)")
 
+    client_kwargs, proxy_info = proxy_settings(os.environ.get("PROXY"))
+    print(f"Connecting to Telegram ({proxy_info})...")
+
     # Logs in on first run (asks phone + code). account.session keeps you logged in:
     # keep it private, it gives access to your account.
-    async with TelegramClient("account", int(api_id), api_hash) as client:
+    async with TelegramClient("account", int(api_id), api_hash, **client_kwargs) as client:
         me = await client.get_me()
         print(f"Logged in as {utils.get_display_name(me)}")
 
@@ -131,3 +181,9 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+    except ConnectionError:
+        raise SystemExit(
+            "\nCan't connect to Telegram. Turn on your VPN, or set PROXY in "
+            "start_reader_windows.bat to your VPN's proxy (e.g. socks5://127.0.0.1:10808) "
+            "or a Telegram proxy link. See README for details."
+        )

@@ -1,5 +1,7 @@
 python-telegram-bot==22.8
 # Read groups with your own account (account_reader.py)
 telethon==1.45.0
+# SOCKS/HTTP proxy support for telethon
+python-socks[asyncio]==3.2.0
 # Timezone database (Windows has none built in)
 tzdata

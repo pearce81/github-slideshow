@@ -46,6 +46,13 @@ then checks for new messages every minute.
 5. Reports: double-click `report.bat`, or in cmd: `report top 7d`, `report count today`,
    `report part 86511-2S000 30d`, `report export month`.
 
+**"Connection to Telegram failed":** the reader connects directly to Telegram's servers.
+Keep your VPN on. It automatically uses the Windows proxy that VPN apps set; if that's not
+enough, set `PROXY` in the .bat file to your VPN's local proxy (v2rayN: `socks5://127.0.0.1:10808`,
+Clash/Hiddify: `http://127.0.0.1:7890` or `:2080`; check your VPN's settings for the port),
+turn on your VPN's **TUN / system-wide** mode, or paste a Telegram MTProto proxy link
+(`tg://proxy?...`, secrets starting with `ee` are not supported).
+
 `account.session` keeps you logged in. **Never share it**: it gives full access to your
 Telegram account. Delete it to log out (and end the session in Telegram → Settings → Devices).
 
