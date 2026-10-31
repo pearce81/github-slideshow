@@ -6,6 +6,7 @@ a member of. The first run asks for your phone number and the login code Telegra
     py account_reader.py --list                       # show your groups and their ids
     py account_reader.py --group -1001234567890       # load history, then keep recording
     py account_reader.py --group "Kia Parts" --days 90 --once
+    py account_reader.py --from 2025-11-01 --to 2026-01-01   # (re)load a date range, then exit
 
 Needs API_ID and API_HASH from https://my.telegram.org -> API development tools.
 """
@@ -125,6 +126,33 @@ async def sync(client, db: Storage, entity, chat_id: int, days: int | None) -> i
     return saved
 
 
+async def backfill(client, db: Storage, entity, chat_id: int, start: datetime, end: datetime) -> int:
+    """Save every message between start and end, even if newer messages are already saved."""
+    rows, saved = [], 0
+    async for msg in client.iter_messages(entity, offset_date=end):  # newest first, older than end
+        if msg.date < start:
+            break
+        row = to_row(chat_id, msg)
+        if row:
+            rows.append(row)
+        if len(rows) >= BATCH:
+            db.save_messages(rows)
+            saved += len(rows)
+            rows = []
+            print(f"  ...{saved} messages saved (back to {msg.date:%Y-%m-%d})", flush=True)
+    if rows:
+        db.save_messages(rows)
+        saved += len(rows)
+    return saved
+
+
+def _day(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"bad date '{value}', use YYYY-MM-DD")
+
+
 async def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--list", action="store_true", help="list your groups and their ids")
@@ -132,6 +160,8 @@ async def main() -> None:
     ap.add_argument("--days", type=int, help="on the first run only load this many days of history")
     ap.add_argument("--once", action="store_true", help="load new messages and exit (don't keep watching)")
     ap.add_argument("--every", type=int, default=60, help="seconds between checks for new messages")
+    ap.add_argument("--from", dest="date_from", type=_day, help="load messages from this day (YYYY-MM-DD)")
+    ap.add_argument("--to", dest="date_to", type=_day, help="...up to and including this day (default: today)")
     ap.add_argument("--db", default=os.environ.get("DB_PATH", "parts.db"))
     args = ap.parse_args()
 
@@ -165,6 +195,15 @@ async def main() -> None:
         chat_id = utils.get_peer_id(entity)  # same -100... id the bot uses
         db = Storage(args.db)
         print(f"Reading '{utils.get_display_name(entity)}' (id {chat_id}) into {args.db}")
+
+        if args.date_from:
+            # One day extra on each side covers timezones; re-saving a message is harmless.
+            start = args.date_from - timedelta(days=1)
+            end = (args.date_to or datetime.now(timezone.utc)) + timedelta(days=2)
+            print(f"Loading {args.date_from:%Y-%m-%d} to {(args.date_to or datetime.now(timezone.utc)):%Y-%m-%d}...")
+            n = await backfill(client, db, entity, chat_id, start, end)
+            print(f"Done: {n} messages loaded. You can now run the reports.")
+            return
 
         n = await sync(client, db, entity, chat_id, args.days)
         print(f"Loaded {n} new messages.")

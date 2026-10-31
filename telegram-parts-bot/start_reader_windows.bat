@@ -12,5 +12,5 @@ REM or a Telegram proxy link  tg://proxy?server=...&port=...&secret=...
 set PROXY=
 
 cd /d "%~dp0"
-py account_reader.py
+py account_reader.py %*
 pause

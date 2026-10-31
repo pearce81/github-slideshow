@@ -64,3 +64,30 @@ def test_proxy_settings(monkeypatch):
     assert ps("")[0]["proxy"]["proxy_type"] == "socks5"
     monkeypatch.setattr(account_reader.urllib.request, "getproxies", lambda: {})
     assert ps(None) == ({}, "no proxy")
+
+
+class FakeHistory:
+    """Newest-first history like Telegram's, honouring offset_date."""
+    def __init__(self, messages):
+        self.messages = sorted(messages, key=lambda m: m.date, reverse=True)
+
+    async def iter_messages(self, entity, offset_date=None):
+        for m in self.messages:
+            if offset_date is None or m.date < offset_date:
+                yield m
+
+
+def test_backfill_loads_only_the_range(tmp_path):
+    db = Storage(str(tmp_path / "b.db"))
+    d = lambda *a: datetime(*a, tzinfo=timezone.utc)  # noqa: E731
+    db.save_message(-1, 900, 1, "a", d(2026, 10, 30), "newest already saved", [])
+    client = FakeHistory([
+        msg(10, "86511-2S000", d(2025, 10, 15)),   # before range
+        msg(11, "86511-2S000", d(2025, 11, 1, 2)),
+        msg(12, "58101-2SA70", d(2025, 12, 31, 22)),
+        msg(13, "58101-2SA70", d(2026, 3, 1)),     # after range
+    ])
+    n = asyncio.run(account_reader.backfill(client, db, None, -1, d(2025, 11, 1), d(2026, 1, 2)))
+    assert n == 2
+    assert db.summary(-1, d(2025, 1, 1), d(2027, 1, 1))["messages"] == 3
+    assert db.last_message_id(-1) == 900  # normal watching continues from the newest message
