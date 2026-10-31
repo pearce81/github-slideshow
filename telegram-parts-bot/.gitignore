@@ -2,3 +2,6 @@
 .env
 __pycache__/
 .pytest_cache/
+*.session
+*.session-journal
+*.csv

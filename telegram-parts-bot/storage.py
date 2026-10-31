@@ -43,23 +43,41 @@ class Storage:
 
     def save_message(self, chat_id, message_id, user_id, user_name, when: datetime, text, parts):
         """Store a message and its part numbers. Re-saving (e.g. on edit) replaces the parts."""
-        ts = _ts(when)
+        self.save_messages([(chat_id, message_id, user_id, user_name, when, text, parts)])
+
+    def save_messages(self, rows):
+        """Bulk version of save_message, in a single transaction."""
         with self.conn:
-            self.conn.execute(
-                "INSERT INTO messages (chat_id, message_id, user_id, user_name, ts, text) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(chat_id, message_id) DO UPDATE SET text = excluded.text",
-                (chat_id, message_id, user_id, user_name, ts, text),
-            )
-            self.conn.execute(
-                "DELETE FROM part_mentions WHERE chat_id = ? AND message_id = ?",
-                (chat_id, message_id),
-            )
-            self.conn.executemany(
-                "INSERT INTO part_mentions (chat_id, message_id, part_number, user_id, ts) "
-                "VALUES (?, ?, ?, ?, ?)",
-                [(chat_id, message_id, p, user_id, ts) for p in parts],
-            )
+            for row in rows:
+                self._save(*row)
+
+    def _save(self, chat_id, message_id, user_id, user_name, when: datetime, text, parts):
+        ts = _ts(when)
+        self.conn.execute(
+            "INSERT INTO messages (chat_id, message_id, user_id, user_name, ts, text) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(chat_id, message_id) DO UPDATE SET text = excluded.text",
+            (chat_id, message_id, user_id, user_name, ts, text),
+        )
+        self.conn.execute(
+            "DELETE FROM part_mentions WHERE chat_id = ? AND message_id = ?",
+            (chat_id, message_id),
+        )
+        self.conn.executemany(
+            "INSERT INTO part_mentions (chat_id, message_id, part_number, user_id, ts) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [(chat_id, message_id, p, user_id, ts) for p in parts],
+        )
+
+    def last_message_id(self, chat_id) -> int:
+        row = self.conn.execute("SELECT MAX(message_id) FROM messages WHERE chat_id = ?", (chat_id,)).fetchone()
+        return row[0] or 0
+
+    def chats(self):
+        """[(chat_id, message_count)] for every chat in the database, biggest first."""
+        return self.conn.execute(
+            "SELECT chat_id, COUNT(*) FROM messages GROUP BY chat_id ORDER BY COUNT(*) DESC"
+        ).fetchall()
 
     def top_parts(self, chat_id, start: datetime, end: datetime, limit=10):
         """[(part_number, times_asked, distinct_users)] most asked first."""

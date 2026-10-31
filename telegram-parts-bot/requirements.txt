@@ -1,3 +1,5 @@
 python-telegram-bot==22.8
+# Read groups with your own account (account_reader.py)
+telethon==1.45.0
 # Timezone database (Windows has none built in)
 tzdata

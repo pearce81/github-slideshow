@@ -29,7 +29,28 @@ messages the group gets.
 * If one message repeats the same part, it counts once; editing a message updates its parts
 * Each count also shows how many *different users* asked, so one person spamming doesn't dominate
 
-## Setup
+## Option A: read the group with your own account (no bot in the group)
+
+Use this if you can't add a bot to the group. `account_reader.py` logs in as **you**
+(like Telegram Desktop) and reads any group you are a member of: it loads the history,
+then checks for new messages every minute.
+
+1. Go to https://my.telegram.org, log in with your phone number, open
+   **API development tools**, create an app (any name), and copy **api_id** and **api_hash**.
+2. Put them in `start_reader_windows.bat` (`API_ID`, `API_HASH`) and double-click it.
+3. First run: type your phone number with country code (e.g. `+989121234567`), then the
+   login code Telegram sends you (and your 2-step password if you have one).
+   It then lists your groups with their ids.
+4. Put the group's id in `GROUP=` in the .bat file and run it again. It loads the history
+   and keeps recording while the window is open.
+5. Reports: double-click `report.bat`, or in cmd: `report top 7d`, `report count today`,
+   `report part 86511-2S000 30d`, `report export month`.
+
+`account.session` keeps you logged in. **Never share it**: it gives full access to your
+Telegram account. Delete it to log out (and end the session in Telegram → Settings → Devices).
+
+## Option B: bot in the group
+
 
 1. **Create the bot**: talk to [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token.
 2. **Let it read the group** (important): in BotFather → `/mybots` → your bot →
@@ -73,5 +94,7 @@ python import_history.py ~/Downloads/ChatExport/result.json --chat-id -100123456
 * `parts.py` – part number extraction/normalisation
 * `periods.py` – period parsing (`7d`, `month`, date ranges…)
 * `storage.py` – SQLite storage and analytics queries
+* `account_reader.py` – read a group with your own account
+* `report.py` – print reports / CSV on your computer
 * `import_history.py` – import a Telegram Desktop JSON export
 * `tests/` – run with `pip install pytest && pytest`
