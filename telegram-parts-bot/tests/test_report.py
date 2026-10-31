@@ -37,3 +37,26 @@ def test_monthly_report(tmp_path, monkeypatch):
     rows = [[c.value for c in r] for r in wb["All months"].iter_rows()]
     assert rows[1:] == [["58101-2SA70", 2, 2, 1, 1], ["86511-2S000", 2, 1, 2, None]]
     assert [c.value for c in wb["2025-11"][5]] == [1, "86511-2S000", 2, 2]
+
+
+def test_average_report(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    tz = ZoneInfo("Asia/Tehran")
+    monkeypatch.setattr(report, "TZ", tz)
+    db = Storage(str(tmp_path / "p.db"))
+    rows, mid = [], 0
+    # Jan: 10 msgs (full), Feb: none, Mar: 10 msgs (full), Apr: 2 msgs (partial)
+    for month, n_a, n_other in ((1, 6, 4), (3, 2, 8), (4, 2, 0)):
+        for k in range(n_a + n_other):
+            mid += 1
+            part = "86511-2S000" if k < n_a else f"0450{k}-00115"
+            rows.append((-1, mid, k, "u", datetime(2026, month, 5, tzinfo=tz), "", [part]))
+    db.save_messages(rows)
+    name = report.average_report(db, -1, report.month_starts("2026-01", "2026-04"), 2)
+    ws = openpyxl.load_workbook(name)["By monthly average"]
+    data = [[c.value for c in r] for r in ws.iter_rows()]
+    assert data[0][:7] == ["Rank", "Part number", "Average per month", "Total (2 full months)",
+                           "Months asked (of 2)", "Jan 2026", "Mar 2026"]
+    assert data[0][7] == "Apr 2026 (partial)"
+    assert data[1] == [1, "865112S000", 4, 8, 2, 6, 2, 2]  # (6 + 2) / 2, April not averaged
+    assert data[2][1] == "0450600115" and len(data) == 3     # dash removed, leading zero kept, limit 2

@@ -7,6 +7,7 @@
     py report.py part 86511-2S000 30d    # how often one part was asked
     py report.py export month            # save a CSV file (opens in Excel)
     py report.py monthly 2025-11 2026-10 100   # top 100 for each month -> Excel file
+    py report.py average 2025-11 2026-10 400   # top 400 by average asks per month -> Excel file
 
 Periods: today | yesterday | 24h | 7d | 30d | month | lastmonth | all | <N>d |
 YYYY-MM-DD [YYYY-MM-DD]
@@ -74,9 +75,7 @@ def monthly_report(db: Storage, chat_id: int, months: list[date], limit: int) ->
     per_month = {}  # month label -> {part: count} for every part asked that month
     top_parts = set()  # parts that made at least one month's top list
     for first in months:
-        nxt = date(first.year + first.month // 12, first.month % 12 + 1, 1)
-        start = datetime.combine(first, time.min, tzinfo=TZ)
-        end = datetime.combine(nxt, time.min, tzinfo=TZ)
+        start, end = month_range(first)
         rows = db.top_parts(chat_id, start, end, limit)
         stats = db.summary(chat_id, start, end)
         label = f"{first:%Y-%m}"
@@ -114,6 +113,78 @@ def monthly_report(db: Storage, chat_id: int, months: list[date], limit: int) ->
     summary.freeze_panes = "B2"
 
     name = f"monthly_top{limit}_{labels[0]}_to_{labels[-1]}.xlsx"
+    wb.save(name)
+    return name
+
+
+def month_range(first: date):
+    nxt = date(first.year + first.month // 12, first.month % 12 + 1, 1)
+    return datetime.combine(first, time.min, tzinfo=TZ), datetime.combine(nxt, time.min, tzinfo=TZ)
+
+
+def average_report(db: Storage, chat_id: int, months: list[date], limit: int) -> str:
+    """Excel file ranking parts by average asks per month, over the months with full data.
+
+    Months with no messages, or under half the messages of a typical (median) month, are
+    gaps in the recording, so they are left out of the average (and shown in grey).
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    counts, messages = {}, {}
+    for first in months:
+        start, end = month_range(first)
+        messages[first] = db.summary(chat_id, start, end)["messages"]
+        counts[first] = {p.replace("-", ""): n for p, n, _ in db.top_parts(chat_id, start, end, -1)}
+    with_data = sorted(m for m in months if messages[m])
+    if not with_data:
+        raise SystemExit("No messages in these months.")
+    typical = sorted(messages[m] for m in with_data)[len(with_data) // 2]
+    full = [m for m in with_data if messages[m] >= typical / 2]
+    partial = [m for m in with_data if m not in full]
+    for m in months:
+        kind = "used" if m in full else ("partial, not used" if m in partial else "no data, not used")
+        print(f"{m:%B %Y}: {messages[m]} messages ({kind})")
+
+    parts = {p for m in full for p in counts[m]}
+    table = []
+    for p in parts:
+        per = [counts[m].get(p, 0) for m in full]
+        table.append((p, sum(per) / len(full), sum(per), sum(1 for n in per if n), per,
+                      [counts[m].get(p, 0) for m in partial]))
+    table.sort(key=lambda r: (-r[1], r[0]))
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "By monthly average"
+    ws.append(["Rank", "Part number", "Average per month", f"Total ({len(full)} full months)",
+               f"Months asked (of {len(full)})", *[f"{m:%b %Y}" for m in full],
+               *[f"{m:%b %Y} (partial)" for m in partial]])
+    for c in ws[1]:
+        c.font = Font(bold=True)
+        c.alignment = Alignment(wrap_text=True, vertical="top")
+    grey = PatternFill("solid", fgColor="EEEEEE")
+    first_partial_col = 6 + len(full)
+    for i, (p, avg, total, n_months, per, per_partial) in enumerate(table[:limit], 1):
+        ws.append([i, p, round(avg, 1), total, n_months, *per, *per_partial])
+        ws.cell(ws.max_row, 2).number_format = "@"  # text: keeps leading zeros
+        ws.cell(ws.max_row, 3).number_format = "0.0"
+        for col in range(first_partial_col, first_partial_col + len(partial)):
+            ws.cell(ws.max_row, col).fill = grey
+    ws.column_dimensions["B"].width = 14
+    ws.row_dimensions[1].height = 45
+    ws.freeze_panes = "C2"
+    ws.auto_filter.ref = ws.dimensions
+
+    notes = wb.create_sheet("How it was calculated")
+    notes.append([f"Average per month = asks in the {len(full)} full months / {len(full)}."])
+    notes.append(["Full months: " + ", ".join(f"{m:%b %Y}" for m in full)])
+    notes.append(["Partial months (under half the messages of a typical month), not in the average: "
+                  + (", ".join(f"{m:%b %Y} ({messages[m]} messages)" for m in partial) or "none")])
+    notes.append(["Months with no data: " + (", ".join(f"{m:%b %Y}" for m in months if not messages[m]) or "none")])
+    notes.column_dimensions["A"].width = 120
+
+    name = f"average_top{limit}_{months[0]:%Y-%m}_to_{months[-1]:%Y-%m}.xlsx"
     wb.save(name)
     return name
 
@@ -158,7 +229,7 @@ def main(argv: list[str]) -> None:
             for ts, part, uid, uname, mid in db.all_mentions(chat_id, start, end):
                 w.writerow([datetime.fromtimestamp(ts, TZ).isoformat(), part, uid, uname, mid])
         print(f"Saved {name} ({label})")
-    elif cmd == "monthly":
+    elif cmd in ("monthly", "average"):
         # monthly [first YYYY-MM] [last YYYY-MM] [N]; default: last 12 months including this one
         months_args = [a for a in args if "-" in a]
         limit = next((int(a) for a in args if a.isdigit()), TOP_N)
@@ -168,7 +239,8 @@ def main(argv: list[str]) -> None:
         else:
             y, m = now.year, now.month - 11
             first = f"{y - 1}-{m + 12}" if m < 1 else f"{y}-{m}"
-        name = monthly_report(db, chat_id, month_starts(first, last), limit)
+        build = monthly_report if cmd == "monthly" else average_report
+        name = build(db, chat_id, month_starts(first, last), limit)
         print(f"\nSaved {name}")
         if os.name == "nt":
             os.startfile(name)
