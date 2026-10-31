@@ -1,1 +1,3 @@
 python-telegram-bot==21.6
+# Timezone database (Windows has none built in)
+tzdata

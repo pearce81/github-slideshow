@@ -46,6 +46,9 @@ messages the group gets.
    python bot.py
    ```
 
+   **Windows:** open `start_windows.bat` in Notepad, paste your token and timezone,
+   save, then double-click it.
+
    Keep it running on a server/VPS (e.g. with `systemd`, `screen`, or Docker) so it
    records messages continuously.
 5. In the group send `/chatid`. Put that id into `GROUP_ID` if you want to ask for
