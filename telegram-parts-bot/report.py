@@ -6,6 +6,7 @@
     py report.py count today             # number of messages
     py report.py part 86511-2S000 30d    # how often one part was asked
     py report.py export month            # save a CSV file (opens in Excel)
+    py report.py monthly 2025-11 2026-10 100   # top 100 for each month -> Excel file
 
 Periods: today | yesterday | 24h | 7d | 30d | month | lastmonth | all | <N>d |
 YYYY-MM-DD [YYYY-MM-DD]
@@ -14,7 +15,7 @@ YYYY-MM-DD [YYYY-MM-DD]
 import csv
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from parts import extract_part_numbers, normalize_text
@@ -43,6 +44,78 @@ def print_top(rows, label):
         print("  No part numbers found.")
     for i, (part, n, users) in enumerate(rows, 1):
         print(f"  {i:>2}. {part:<14} {n:>4}x  ({users} users)")
+
+
+def month_starts(first: str, last: str) -> list[date]:
+    """['2025-11', '2026-10'] -> 1st day of every month from first to last, inclusive."""
+    try:
+        y, m = map(int, first.split("-")[:2])
+        end_y, end_m = map(int, last.split("-")[:2])
+    except ValueError:
+        raise PeriodError("Months must look like 2025-11")
+    months = []
+    while (y, m) <= (end_y, end_m):
+        months.append(date(y, m, 1))
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    if not months:
+        raise PeriodError("The last month is before the first month")
+    return months
+
+
+def monthly_report(db: Storage, chat_id: int, months: list[date], limit: int) -> str:
+    """Excel file: a summary sheet (parts x months) and one sheet per month. Returns the file name."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    bold = Font(bold=True)
+    wb = Workbook()
+    summary = wb.active
+    summary.title = "All months"
+    per_month = {}  # month label -> {part: count} for every part asked that month
+    top_parts = set()  # parts that made at least one month's top list
+    for first in months:
+        nxt = date(first.year + first.month // 12, first.month % 12 + 1, 1)
+        start = datetime.combine(first, time.min, tzinfo=TZ)
+        end = datetime.combine(nxt, time.min, tzinfo=TZ)
+        rows = db.top_parts(chat_id, start, end, limit)
+        stats = db.summary(chat_id, start, end)
+        label = f"{first:%Y-%m}"
+        per_month[label] = {part: n for part, n, _ in db.top_parts(chat_id, start, end, -1)}
+        top_parts.update(part for part, _, _ in rows)
+        print(f"{first:%B %Y}: {stats['messages']} messages, {stats['part_mentions']} part requests")
+
+        ws = wb.create_sheet(label)
+        ws.append([f"Top {limit} part numbers – {first:%B %Y}"])
+        ws.append([f"{stats['messages']} messages, {stats['part_mentions']} part requests, "
+                   f"{stats['unique_parts']} different part numbers"])
+        ws.append([])
+        ws.append(["Rank", "Part number", "Times asked", "Different users"])
+        for i, (part, n, users) in enumerate(rows, 1):
+            ws.append([i, part, n, users])
+        ws["A1"].font = bold
+        for c in ws[4]:
+            c.font = bold
+        ws.column_dimensions["B"].width = 18
+        ws.column_dimensions["C"].width = 13
+        ws.column_dimensions["D"].width = 16
+        ws.freeze_panes = "A5"
+
+    # Summary: every part that made any month's top list, with its real count in every month.
+    labels = list(per_month)
+    table = {part: [per_month[m].get(part, 0) for m in labels] for part in top_parts}
+    summary.append(["Part number", "Total asked", "Months asked", *labels])
+    for part, counts in sorted(table.items(), key=lambda kv: (-sum(kv[1]), kv[0])):
+        summary.append([part, sum(counts), sum(1 for n in counts if n), *[n or "" for n in counts]])
+    for c in summary[1]:
+        c.font = bold
+    summary.column_dimensions["A"].width = 18
+    summary.column_dimensions["B"].width = 12
+    summary.column_dimensions["C"].width = 14
+    summary.freeze_panes = "B2"
+
+    name = f"monthly_top{limit}_{labels[0]}_to_{labels[-1]}.xlsx"
+    wb.save(name)
+    return name
 
 
 def main(argv: list[str]) -> None:
@@ -85,6 +158,20 @@ def main(argv: list[str]) -> None:
             for ts, part, uid, uname, mid in db.all_mentions(chat_id, start, end):
                 w.writerow([datetime.fromtimestamp(ts, TZ).isoformat(), part, uid, uname, mid])
         print(f"Saved {name} ({label})")
+    elif cmd == "monthly":
+        # monthly [first YYYY-MM] [last YYYY-MM] [N]; default: last 12 months including this one
+        months_args = [a for a in args if "-" in a]
+        limit = next((int(a) for a in args if a.isdigit()), TOP_N)
+        last = months_args[1] if len(months_args) > 1 else f"{now:%Y-%m}"
+        if months_args:
+            first = months_args[0]
+        else:
+            y, m = now.year, now.month - 11
+            first = f"{y - 1}-{m + 12}" if m < 1 else f"{y}-{m}"
+        name = monthly_report(db, chat_id, month_starts(first, last), limit)
+        print(f"\nSaved {name}")
+        if os.name == "nt":
+            os.startfile(name)
     else:
         print(__doc__)
 

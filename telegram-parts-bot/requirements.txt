@@ -5,3 +5,5 @@ telethon==1.45.0
 python-socks[asyncio]==3.2.0
 # Timezone database (Windows has none built in)
 tzdata
+# Excel files for the monthly report
+openpyxl==3.1.5

@@ -45,6 +45,8 @@ then checks for new messages every minute.
    and keeps recording while the window is open.
 5. Reports: double-click `report.bat`, or in cmd: `report top 7d`, `report count today`,
    `report part 86511-2S000 30d`, `report export month`.
+6. Month by month: `report monthly 2025-11 2026-10 100` saves an Excel file with the top 100
+   for each month (one sheet per month) and an "All months" sheet comparing them.
 
 **"Connection to Telegram failed":** the reader connects directly to Telegram's servers.
 Keep your VPN on. It automatically uses the Windows proxy that VPN apps set; if that's not
