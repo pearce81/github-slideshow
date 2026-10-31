@@ -91,3 +91,12 @@ def test_backfill_loads_only_the_range(tmp_path):
     assert n == 2
     assert db.summary(-1, d(2025, 1, 1), d(2027, 1, 1))["messages"] == 3
     assert db.last_message_id(-1) == 900  # normal watching continues from the newest message
+
+
+def test_explain_empty(capsys):
+    class C:
+        async def get_messages(self, entity, limit, reverse=False):
+            d = datetime(2026, 2, 10, tzinfo=timezone.utc) if reverse else datetime(2026, 10, 30, tzinfo=timezone.utc)
+            return [NS(date=d)]
+    asyncio.run(account_reader.explain_empty(C(), None))
+    assert "from 2026-02-10 to 2026-10-30" in capsys.readouterr().out

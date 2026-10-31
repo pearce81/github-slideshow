@@ -146,6 +146,18 @@ async def backfill(client, db: Storage, entity, chat_id: int, start: datetime, e
     return saved
 
 
+async def explain_empty(client, entity) -> None:
+    """Say which dates Telegram does give this account, so the user knows why a range is empty."""
+    oldest = await client.get_messages(entity, limit=1, reverse=True)
+    newest = await client.get_messages(entity, limit=1)
+    if not oldest:
+        print("Telegram returned no messages at all for this group to your account.")
+        return
+    print(f"Telegram gives your account messages from {oldest[0].date:%Y-%m-%d} to {newest[0].date:%Y-%m-%d}.")
+    print("Older messages are not available to you: the group probably hides its history from "
+          "members who joined later, or was created/cleared on that date.")
+
+
 def _day(value: str) -> datetime:
     try:
         return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
@@ -203,6 +215,8 @@ async def main() -> None:
             print(f"Loading {args.date_from:%Y-%m-%d} to {(args.date_to or datetime.now(timezone.utc)):%Y-%m-%d}...")
             n = await backfill(client, db, entity, chat_id, start, end)
             print(f"Done: {n} messages loaded. You can now run the reports.")
+            if n == 0:
+                await explain_empty(client, entity)
             return
 
         n = await sync(client, db, entity, chat_id, args.days)
