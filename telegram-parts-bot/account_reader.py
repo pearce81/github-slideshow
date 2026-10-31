@@ -149,10 +149,16 @@ async def main() -> None:
         print(f"Logged in as {utils.get_display_name(me)}")
 
         if args.list or not args.group:
+            lines = [f"{d.id}    {d.name}" async for d in client.iter_dialogs() if d.is_group or d.is_channel]
             print("\nYour groups (use the number with --group):")
-            async for d in client.iter_dialogs():
-                if d.is_group or d.is_channel:
-                    print(f"  {d.id}  {d.name}")
+            print("\n".join("  " + line for line in lines))
+            # The Windows console font can't show Persian/Arabic names, Notepad can.
+            with open("groups.txt", "w", encoding="utf-8-sig") as f:
+                f.write("Copy the number of your group into GROUP= in start_reader_windows.bat\n\n")
+                f.write("\n".join(lines) + "\n")
+            print("\nThe list is also saved in groups.txt")
+            if os.name == "nt":
+                os.startfile("groups.txt")
             return
 
         entity = await find_group(client, args.group)
