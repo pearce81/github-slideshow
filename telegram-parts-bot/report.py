@@ -66,8 +66,8 @@ def month_starts(first: str, last: str) -> list[date]:
     return months
 
 
-def monthly_report(db: Storage, chat_id: int, months: list[date], limit: int) -> str:
-    """Excel file: a summary sheet (parts x months) and one sheet per month. Returns the file name."""
+def monthly_report(db: Storage, chat_id: int, months: list[date], limit: int, folder: str = ".") -> str:
+    """Excel file: a summary sheet (parts x months) and one sheet per month. Returns its path."""
     from openpyxl import Workbook
     from openpyxl.styles import Font
 
@@ -115,9 +115,22 @@ def monthly_report(db: Storage, chat_id: int, months: list[date], limit: int) ->
     summary.column_dimensions["C"].width = 14
     summary.freeze_panes = "B2"
 
-    name = f"monthly_top{limit}_{labels[0]}_to_{labels[-1]}.xlsx"
+    name = os.path.join(folder, f"monthly_top{limit}_{labels[0]}_to_{labels[-1]}.xlsx")
     wb.save(name)
     return name
+
+
+def months_and_limit(args: list[str], now: datetime) -> tuple[list[date], int]:
+    """[first YYYY-MM] [last YYYY-MM] [N] -> months and N; default: last 12 months including this one."""
+    months_args = [a for a in args if "-" in a]
+    limit = next((int(a) for a in args if a.isdigit()), TOP_N)
+    last = months_args[1] if len(months_args) > 1 else f"{now:%Y-%m}"
+    if months_args:
+        first = months_args[0]
+    else:
+        y, m = now.year, now.month - 11
+        first = f"{y - 1}-{m + 12}" if m < 1 else f"{y}-{m}"
+    return month_starts(first, last), limit
 
 
 def month_range(first: date):
@@ -151,8 +164,8 @@ def part_key(code: str) -> str:
     return normalize_text(code).strip().replace("-", "").replace(" ", "")
 
 
-def part_averages(db: Storage, chat_id: int, codes: list[str]) -> None:
-    """Print each part's average asks per month over all full months of data, and its rank."""
+def part_averages(db: Storage, chat_id: int, codes: list[str]) -> str:
+    """Each part's average asks per month over all full months of data, and its rank, as text."""
     oldest, newest = db.date_range(chat_id)
     if oldest is None:
         raise SystemExit("The database is empty.")
@@ -166,29 +179,30 @@ def part_averages(db: Storage, chat_id: int, codes: list[str]) -> None:
             totals[p] = totals.get(p, 0) + n
     ranking = {p: i for i, (p, _) in enumerate(sorted(totals.items(), key=lambda kv: (-kv[1], kv[0])), 1)}
 
-    print(f"All data: {first:%Y-%m-%d} to {last:%Y-%m-%d}. Average over {len(full)} full months: "
-          + ", ".join(f"{m:%b %Y}" for m in full))
+    out = [f"All data: {first:%Y-%m-%d} to {last:%Y-%m-%d}. Average over {len(full)} full months: "
+           + ", ".join(f"{m:%b %Y}" for m in full)]
     if partial:
-        print("Partial months, not in the average: " + ", ".join(f"{m:%b %Y}" for m in partial))
+        out.append("Partial months, not in the average: " + ", ".join(f"{m:%b %Y}" for m in partial))
     for code in codes:
         key = part_key(code)
         per_full = [counts[m].get(key, 0) for m in full]
         total_all = sum(counts[m].get(key, 0) for m in months)
-        print(f"\n{key}")
+        out.append(f"\n{key}")
         if not total_all:
-            print("  Never asked in the data.")
+            out.append("  Never asked in the data.")
             continue
-        print(f"  Average per month: {sum(per_full) / len(full):.1f}")
+        out.append(f"  Average per month: {sum(per_full) / len(full):.1f}")
         if key in ranking:
-            print(f"  Rank by average:   {ranking[key]} of {len(ranking)} part numbers")
-        print(f"  Total asked:       {total_all} (all data)")
-        print("  Per month:         " + "  ".join(
+            out.append(f"  Rank by average:   {ranking[key]} of {len(ranking)} part numbers")
+        out.append(f"  Total asked:       {total_all} (all data)")
+        out.append("  Per month:         " + "  ".join(
             f"{m:%b %Y}: {counts[m].get(key, 0)}{' (partial)' if m in partial else ''}"
             for m in months if messages[m]))
+    return "\n".join(out)
 
 
-def prefix_report(db: Storage, chat_id: int, prefix: str, period: list[str], now: datetime) -> None:
-    """Print every part number starting with prefix, most asked first.
+def prefix_report(db: Storage, chat_id: int, prefix: str, period: list[str], now: datetime) -> str:
+    """Every part number starting with prefix, most asked first, as text.
 
     With no period: all data, plus the average per month over the full months.
     """
@@ -209,18 +223,20 @@ def prefix_report(db: Storage, chat_id: int, prefix: str, period: list[str], now
 
     rows = [(p.replace("-", ""), n, users) for p, n, users in db.top_parts(chat_id, start, end, -1)
             if p.replace("-", "").startswith(key)]
-    print(f"Part numbers starting with {key} – {label}: {len(rows)} found, "
-          f"{sum(n for _, n, _ in rows)} asks in total")
+    out = [f"Part numbers starting with {key} – {label}: {len(rows)} found, "
+           f"{sum(n for _, n, _ in rows)} asks in total"]
     if not rows:
-        return
+        return out[0]
     if avg:
-        print(f"(average per month over {len(full)} full months: " + ", ".join(f"{m:%b %Y}" for m in full) + ")")
-    print(f"\n  {'Rank':>4}  {'Part number':<12} {'Asked':>7} {'Users':>6}" + ("  Avg/month" if avg else ""))
+        out.append(f"(average per month over {len(full)} full months: "
+                   + ", ".join(f"{m:%b %Y}" for m in full) + ")")
+    out.append(f"\n  {'Rank':>4}  {'Part number':<12} {'Asked':>7} {'Users':>6}" + ("  Avg/month" if avg else ""))
     for i, (p, n, users) in enumerate(rows, 1):
-        print(f"  {i:>4}  {p:<12} {n:>7} {users:>6}" + (f"  {avg(p):>9.1f}" if avg else ""))
+        out.append(f"  {i:>4}  {p:<12} {n:>7} {users:>6}" + (f"  {avg(p):>9.1f}" if avg else ""))
+    return "\n".join(out)
 
 
-def average_report(db: Storage, chat_id: int, months: list[date], limit: int) -> str:
+def average_report(db: Storage, chat_id: int, months: list[date], limit: int, folder: str = ".") -> str:
     """Excel file ranking parts by average asks per month, over the months with full data.
 
     Partial months (see classify_months) are shown in grey but not averaged.
@@ -271,7 +287,7 @@ def average_report(db: Storage, chat_id: int, months: list[date], limit: int) ->
     notes.append(["Months with no data: " + (", ".join(f"{m:%b %Y}" for m in months if not messages[m]) or "none")])
     notes.column_dimensions["A"].width = 120
 
-    name = f"average_top{limit}_{months[0]:%Y-%m}_to_{months[-1]:%Y-%m}.xlsx"
+    name = os.path.join(folder, f"average_top{limit}_{months[0]:%Y-%m}_to_{months[-1]:%Y-%m}.xlsx")
     wb.save(name)
     return name
 
@@ -317,24 +333,15 @@ def main(argv: list[str]) -> None:
                 w.writerow([datetime.fromtimestamp(ts, TZ).isoformat(), part, uid, uname, mid])
         print(f"Saved {name} ({label})")
     elif cmd in ("monthly", "average"):
-        # monthly [first YYYY-MM] [last YYYY-MM] [N]; default: last 12 months including this one
-        months_args = [a for a in args if "-" in a]
-        limit = next((int(a) for a in args if a.isdigit()), TOP_N)
-        last = months_args[1] if len(months_args) > 1 else f"{now:%Y-%m}"
-        if months_args:
-            first = months_args[0]
-        else:
-            y, m = now.year, now.month - 11
-            first = f"{y - 1}-{m + 12}" if m < 1 else f"{y}-{m}"
         build = monthly_report if cmd == "monthly" else average_report
-        name = build(db, chat_id, month_starts(first, last), limit)
-        print(f"\nSaved {name}")
+        name = build(db, chat_id, *months_and_limit(args, now))
+        print(f"\nSaved {os.path.basename(name)}")
         if os.name == "nt":
             os.startfile(name)
     elif cmd == "prefix" and args:
-        prefix_report(db, chat_id, args[0], args[1:], now)
+        print(prefix_report(db, chat_id, args[0], args[1:], now))
     elif cmd == "avg" and args:
-        part_averages(db, chat_id, args)
+        print(part_averages(db, chat_id, args))
     else:
         print(__doc__)
 

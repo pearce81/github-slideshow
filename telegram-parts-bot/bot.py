@@ -1,14 +1,17 @@
 """Telegram bot that records a Hyundai/Kia parts group and reports the most asked part numbers.
 
 Run:  TELEGRAM_BOT_TOKEN=... python bot.py
-See README.md for setup (the bot's privacy mode must be disabled).
+It reports on parts.db, so it also works for groups recorded by account_reader.py
+(then the bot doesn't need to be in the group). See README.md for setup.
 """
 
 import asyncio
 import csv
+import html
 import io
 import logging
 import os
+import tempfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -16,6 +19,7 @@ from telegram import Update
 from telegram.constants import ChatType, ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
+import report as reports
 from parts import extract_part_numbers, normalize_text
 from periods import PERIOD_HELP, PeriodError, parse_period
 from storage import Storage
@@ -36,21 +40,27 @@ TZ = ZoneInfo(os.environ.get("TIMEZONE", "UTC"))
 ADMIN_IDS = _int_set("ADMIN_IDS")            # who may run reports (empty = anyone)
 TRACKED_CHATS = _int_set("TRACKED_CHAT_IDS")  # which groups to record (empty = all)
 DEFAULT_CHAT_ID = int(os.environ["GROUP_ID"]) if os.environ.get("GROUP_ID") else None
+TOP_N = reports.TOP_N  # default list length, TOP_N in the start script
+MAX_MESSAGE = 3800     # Telegram allows 4096 characters; longer answers are sent as a .txt file
 
 db = Storage(DB_PATH)
 
 HELP = f"""<b>Hyundai / Kia part number analytics</b>
 
-/top [period] [N] – most asked part numbers (default: last 30 days, top 10)
-/report – top parts for today, 7 days, 30 days and this month
+/top [period] [N] – most asked part numbers (default: last 30 days, top {TOP_N})
+/report – top parts for 24 hours, 7 days, 30 days and this month
 /count [period] – number of group messages, users and part requests
 /part &lt;number&gt; [period] – how often one part number was asked
+/avg &lt;number&gt; [&lt;number&gt; …] – average asks per month, rank, per-month counts
+/prefix &lt;start&gt; [period] – all parts starting with e.g. 21910, most asked first
+/monthly [first] [last] [N] – Excel: top N of each month
+/average [first] [last] [N] – Excel: top N by average asks per month
 /export [period] – CSV of all part requests
-/chatid – show this chat's id
+/chatid – show this chat's id and your user id
 
 <b>Periods:</b> {PERIOD_HELP}
-Examples: <code>/top 7d</code>, <code>/top month 20</code>, <code>/top today</code>,
-<code>/count 24h</code>, <code>/top 2026-10-01 2026-10-15</code>, <code>/part 86511-2S000 all</code>
+Examples: <code>/top 7d</code>, <code>/top month 100</code>, <code>/avg 264102G000</code>,
+<code>/prefix 21910</code>, <code>/monthly 2025-11 2026-10 100</code>, <code>/average 2025-11 2026-10 400</code>
 """
 
 
@@ -92,12 +102,33 @@ async def _target_chat(update: Update) -> int | None:
     chat = update.effective_chat
     if chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
         return chat.id
-    if DEFAULT_CHAT_ID is None:
+    if DEFAULT_CHAT_ID is not None:
+        return DEFAULT_CHAT_ID
+    chats = db.chats()
+    if len(chats) == 1:
+        return chats[0][0]  # only one group recorded: no need to configure GROUP_ID
+    await update.effective_message.reply_text(
+        "Set GROUP_ID in the bot's start file to the group to report on"
+        + (": " + ", ".join(str(c) for c, _ in chats) if chats else " (the database is empty).")
+    )
+    return None
+
+
+async def _send_text(update: Update, title: str, text: str, filename: str) -> None:
+    """Monospace answer, or a .txt file when it's too long for one Telegram message."""
+    if len(text) <= MAX_MESSAGE:
         await update.effective_message.reply_text(
-            "In private chat set GROUP_ID in the bot config, or run the command inside the group."
+            f"<b>{html.escape(title)}</b>\n<pre>{html.escape(text)}</pre>", parse_mode=ParseMode.HTML
         )
-        return None
-    return DEFAULT_CHAT_ID
+    else:
+        await update.effective_message.reply_document(
+            io.BytesIO(text.encode("utf-8")), filename=filename, caption=title
+        )
+
+
+async def _in_thread(fn, *args):
+    """Run a slow report off the event loop, with its own database connection."""
+    return await asyncio.to_thread(lambda: fn(Storage(DB_PATH), *args))
 
 
 def _period(update: Update, args: list[str]):
@@ -136,9 +167,74 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except PeriodError as e:
         await update.effective_message.reply_text(str(e))
         return
-    limit = int(rest[0]) if rest and rest[0].isdigit() else 10
-    rows = db.top_parts(chat_id, start, end, min(max(limit, 1), 100))
-    await update.effective_message.reply_text(_format_top(rows, label), parse_mode=ParseMode.HTML)
+    limit = int(rest[0]) if rest and rest[0].isdigit() else TOP_N
+    rows = db.top_parts(chat_id, start, end, min(max(limit, 1), 5000))
+    text = _format_top(rows, label)
+    if len(text) <= MAX_MESSAGE:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+        return
+    lines = [f"{i:>4}. {part:<14} {n:>6}x  ({users} users)" for i, (part, n, users) in enumerate(rows, 1)]
+    await _send_text(update, f"Most asked – {label}", "\n".join(lines), f"top{limit}.txt")
+
+
+async def cmd_avg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = await _target_chat(update)
+    if chat_id is None:
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /avg 264102G000 [23040-2C250 …]")
+        return
+    try:
+        text = await _in_thread(reports.part_averages, chat_id, context.args)
+    except SystemExit as e:
+        await update.effective_message.reply_text(str(e))
+        return
+    await _send_text(update, "Average asks per month", text, "average.txt")
+
+
+async def cmd_prefix(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = await _target_chat(update)
+    if chat_id is None:
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /prefix 21910 [period]")
+        return
+    try:
+        text = await _in_thread(reports.prefix_report, chat_id, context.args[0], context.args[1:], datetime.now(TZ))
+    except (SystemExit, PeriodError) as e:
+        await update.effective_message.reply_text(str(e))
+        return
+    await _send_text(update, f"Parts starting with {context.args[0]}", text, f"prefix_{context.args[0]}.txt")
+
+
+async def _excel(update: Update, context: ContextTypes.DEFAULT_TYPE, build) -> None:
+    chat_id = await _target_chat(update)
+    if chat_id is None:
+        return
+    try:
+        months, limit = reports.months_and_limit(context.args, datetime.now(TZ))
+    except PeriodError as e:
+        await update.effective_message.reply_text(str(e))
+        return
+    await update.effective_message.reply_text(
+        f"Building the Excel file for {months[0]:%b %Y} – {months[-1]:%b %Y}, top {limit}…"
+    )
+    with tempfile.TemporaryDirectory() as folder:
+        try:
+            path = await _in_thread(build, chat_id, months, limit, folder)
+        except SystemExit as e:
+            await update.effective_message.reply_text(str(e))
+            return
+        with open(path, "rb") as f:
+            await update.effective_message.reply_document(f, filename=os.path.basename(path))
+
+
+async def cmd_monthly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _excel(update, context, reports.monthly_report)
+
+
+async def cmd_average(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _excel(update, context, reports.average_report)
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -228,6 +324,10 @@ def main() -> None:
     app.add_handler(CommandHandler("count", cmd_count))
     app.add_handler(CommandHandler("part", cmd_part))
     app.add_handler(CommandHandler("export", cmd_export))
+    app.add_handler(CommandHandler("avg", cmd_avg))
+    app.add_handler(CommandHandler("prefix", cmd_prefix))
+    app.add_handler(CommandHandler("monthly", cmd_monthly))
+    app.add_handler(CommandHandler("average", cmd_average))
     # Every non-service group message, including edits (edits re-extract part numbers).
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.StatusUpdate.ALL, record_message))
     log.info("Bot started (db=%s, tz=%s)", DB_PATH, TZ)

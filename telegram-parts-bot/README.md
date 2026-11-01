@@ -58,6 +58,14 @@ turn on your VPN's **TUN / system-wide** mode, or paste a Telegram MTProto proxy
 `account.session` keeps you logged in. **Never share it**: it gives full access to your
 Telegram account. Delete it to log out (and end the session in Telegram → Settings → Devices).
 
+## Reports in Telegram (bot)
+
+The bot answers every report in Telegram, using the same `parts.db` the reader fills, so
+it does not need to be in the group. Create a bot with @BotFather, put its token and your
+user id (`ADMIN_IDS`) in `start_windows.bat`, double-click it next to the reader, and send
+`/help` to your bot in a private chat. Commands: `/top`, `/report`, `/count`, `/part`,
+`/avg`, `/prefix`, `/monthly`, `/average` (Excel files), `/export` (CSV), `/chatid`.
+
 ## Option B: bot in the group
 
 

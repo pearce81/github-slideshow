@@ -74,8 +74,7 @@ def test_part_averages(tmp_path, monkeypatch, capsys):
             part = "86511-2S000" if k < n_a else f"0450{k}-00115"
             rows.append((-1, mid, k, "u", datetime(2026, month, 5, tzinfo=tz), "", [part]))
     db.save_messages(rows)
-    report.part_averages(db, -1, ["865112s000", "04506-00115", "99999-99999"])
-    out = capsys.readouterr().out
+    out = report.part_averages(db, -1, ["865112s000", "04506-00115", "99999-99999"])
     assert "Average over 2 full months: Jan 2026, Mar 2026" in out
     assert "865112S000\n  Average per month: 4.0\n  Rank by average:   1 of" in out
     assert "Total asked:       10 (all data)" in out
@@ -95,10 +94,9 @@ def test_prefix_report(tmp_path, monkeypatch, capsys):
                 mid += 1
                 rows.append((-1, mid, k, "u", datetime(2026, month, 5, tzinfo=tz), "", [part]))
     db.save_messages(rows)
-    report.prefix_report(db, -1, "21910", [], datetime(2026, 3, 1, tzinfo=tz))
-    out = capsys.readouterr().out
+    out = report.prefix_report(db, -1, "21910", [], datetime(2026, 3, 1, tzinfo=tz))
     assert "starting with 21910 – all data: 2 found, 16 asks in total" in out
     lines = [line.split() for line in out.splitlines() if line.strip()[:1].isdigit()]
     assert lines == [["1", "219103K000", "10", "5", "5.0"], ["2", "219102B500", "6", "3", "3.0"]]
-    report.prefix_report(db, -1, "2191", ["2026-02-01", "2026-02-28"], datetime(2026, 3, 1, tzinfo=tz))
-    assert "2191 – 2026-02-01 → 2026-02-28: 3 found, 17 asks" in capsys.readouterr().out
+    out = report.prefix_report(db, -1, "2191", ["2026-02-01", "2026-02-28"], datetime(2026, 3, 1, tzinfo=tz))
+    assert "2191 – 2026-02-01 → 2026-02-28: 3 found, 17 asks" in out
