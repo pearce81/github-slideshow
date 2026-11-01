@@ -58,7 +58,10 @@ HELP = f"""<b>Hyundai / Kia part number analytics</b>
 /export [period] – CSV of all part requests
 /chatid – show this chat's id and your user id
 
-<b>Periods:</b> {PERIOD_HELP}
+Or just send a part number (<code>264102G000</code>) for its numbers,
+or its first characters (<code>21910</code>) for all parts starting with them.
+
+<b>Periods:</b> {html.escape(PERIOD_HELP)}
 Examples: <code>/top 7d</code>, <code>/top month 100</code>, <code>/avg 264102G000</code>,
 <code>/prefix 21910</code>, <code>/monthly 2025-11 2026-10 100</code>, <code>/average 2025-11 2026-10 400</code>
 """
@@ -207,6 +210,37 @@ async def cmd_prefix(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await _send_text(update, f"Parts starting with {context.args[0]}", text, f"prefix_{context.args[0]}.txt")
 
 
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Private chat text that isn't a known command, e.g. "264102G000", "/264102g000 30d" or "21910".
+
+    A full part number gets its average and count; anything shorter is used as a prefix.
+    """
+    words = (update.effective_message.text or "").lstrip("/").split()
+    key = reports.part_key(words[0]) if words else ""
+    if len(key) < 3 or not key.isalnum() or not any(c.isdigit() for c in key):
+        await update.effective_message.reply_text("Unknown command. Send /help for the list.")
+        return
+    chat_id = await _target_chat(update)
+    if chat_id is None:
+        return
+    period = words[1:]
+    try:
+        if len(key) >= 10:
+            text = await _in_thread(reports.part_averages, chat_id, [key])
+            if period:
+                start, end, label, _ = _period(update, period)
+                n, users = db.part_count(chat_id, f"{key[:5]}-{key[5:]}" if len(key) == 10 else key, start, end)
+                text += f"\n\n{label}: asked {n} times by {users} users"
+            title = f"Part {key}"
+        else:
+            text = await _in_thread(reports.prefix_report, chat_id, key, period, datetime.now(TZ))
+            title = f"Parts starting with {key}"
+    except (SystemExit, PeriodError) as e:
+        await update.effective_message.reply_text(str(e))
+        return
+    await _send_text(update, title, text, f"{key}.txt")
+
+
 async def _excel(update: Update, context: ContextTypes.DEFAULT_TYPE, build) -> None:
     chat_id = await _target_chat(update)
     if chat_id is None:
@@ -330,6 +364,8 @@ def main() -> None:
     app.add_handler(CommandHandler("average", cmd_average))
     # Every non-service group message, including edits (edits re-extract part numbers).
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.StatusUpdate.ALL, record_message))
+    # Private chat: a bare part number, or one typed as if it were a command ("/264102g000 30d").
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, on_text))
     log.info("Bot started (db=%s, tz=%s)", DB_PATH, TZ)
     # Python 3.14+ no longer creates a default event loop; run_polling expects one.
     asyncio.set_event_loop(asyncio.new_event_loop())
