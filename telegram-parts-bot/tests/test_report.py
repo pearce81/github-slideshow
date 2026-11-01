@@ -60,3 +60,25 @@ def test_average_report(tmp_path, monkeypatch):
     assert data[0][7] == "Apr 2026 (partial)"
     assert data[1] == [1, "865112S000", 4, 8, 2, 6, 2, 2]  # (6 + 2) / 2, April not averaged
     assert data[2][1] == "0450600115" and len(data) == 3     # dash removed, leading zero kept, limit 2
+
+
+def test_part_averages(tmp_path, monkeypatch, capsys):
+    tz = ZoneInfo("Asia/Tehran")
+    monkeypatch.setattr(report, "TZ", tz)
+    db = Storage(str(tmp_path / "p.db"))
+    rows, mid = [], 0
+    # Jan: 10 msgs, Feb: none, Mar: 10 msgs, Apr: 2 msgs (partial)
+    for month, n_a, n_other in ((1, 6, 4), (3, 2, 8), (4, 2, 0)):
+        for k in range(n_a + n_other):
+            mid += 1
+            part = "86511-2S000" if k < n_a else f"0450{k}-00115"
+            rows.append((-1, mid, k, "u", datetime(2026, month, 5, tzinfo=tz), "", [part]))
+    db.save_messages(rows)
+    report.part_averages(db, -1, ["865112s000", "04506-00115", "99999-99999"])
+    out = capsys.readouterr().out
+    assert "Average over 2 full months: Jan 2026, Mar 2026" in out
+    assert "865112S000\n  Average per month: 4.0\n  Rank by average:   1 of" in out
+    assert "Total asked:       10 (all data)" in out
+    assert "Apr 2026: 2 (partial)" in out
+    assert "0450600115\n  Average per month: 1.0" in out
+    assert "9999999999\n  Never asked in the data." in out

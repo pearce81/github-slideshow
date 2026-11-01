@@ -73,6 +73,12 @@ class Storage:
         row = self.conn.execute("SELECT MAX(message_id) FROM messages WHERE chat_id = ?", (chat_id,)).fetchone()
         return row[0] or 0
 
+    def date_range(self, chat_id):
+        """(oldest, newest) message time as unix seconds, or (None, None) if there are none."""
+        return self.conn.execute(
+            "SELECT MIN(ts), MAX(ts) FROM messages WHERE chat_id = ?", (chat_id,)
+        ).fetchone()
+
     def chats(self):
         """[(chat_id, message_count)] for every chat in the database, biggest first."""
         return self.conn.execute(

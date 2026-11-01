@@ -8,6 +8,7 @@
     py report.py export month            # save a CSV file (opens in Excel)
     py report.py monthly 2025-11 2026-10 100   # top 100 for each month -> Excel file
     py report.py average 2025-11 2026-10 400   # top 400 by average asks per month -> Excel file
+    py report.py avg 264102G000 23040-2C250    # average asks per month for these parts (all data)
 
 Periods: today | yesterday | 24h | 7d | 30d | month | lastmonth | all | <N>d |
 YYYY-MM-DD [YYYY-MM-DD]
@@ -122,15 +123,13 @@ def month_range(first: date):
     return datetime.combine(first, time.min, tzinfo=TZ), datetime.combine(nxt, time.min, tzinfo=TZ)
 
 
-def average_report(db: Storage, chat_id: int, months: list[date], limit: int) -> str:
-    """Excel file ranking parts by average asks per month, over the months with full data.
+def classify_months(db: Storage, chat_id: int, months: list[date]):
+    """Split months into full ones and partial ones (recording gaps).
 
-    Months with no messages, or under half the messages of a typical (median) month, are
-    gaps in the recording, so they are left out of the average (and shown in grey).
+    Returns (messages per month, part counts per month, full months, partial months).
+    Months with no messages, or under half the messages of a typical (median) month,
+    are gaps in the recording and shouldn't count towards an average.
     """
-    from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
-
     counts, messages = {}, {}
     for first in months:
         start, end = month_range(first)
@@ -142,6 +141,59 @@ def average_report(db: Storage, chat_id: int, months: list[date], limit: int) ->
     typical = sorted(messages[m] for m in with_data)[len(with_data) // 2]
     full = [m for m in with_data if messages[m] >= typical / 2]
     partial = [m for m in with_data if m not in full]
+    return messages, counts, full, partial
+
+
+def part_key(code: str) -> str:
+    """Part number as typed (86511-2S000, 865112s000, ۸۶۵۱۱۲S۰۰۰) -> the form without dashes."""
+    return normalize_text(code).strip().replace("-", "").replace(" ", "")
+
+
+def part_averages(db: Storage, chat_id: int, codes: list[str]) -> None:
+    """Print each part's average asks per month over all full months of data, and its rank."""
+    oldest, newest = db.date_range(chat_id)
+    if oldest is None:
+        raise SystemExit("The database is empty.")
+    first, last = datetime.fromtimestamp(oldest, TZ), datetime.fromtimestamp(newest, TZ)
+    months = month_starts(f"{first:%Y-%m}", f"{last:%Y-%m}")
+    messages, counts, full, partial = classify_months(db, chat_id, months)
+
+    totals = {}
+    for m in full:
+        for p, n in counts[m].items():
+            totals[p] = totals.get(p, 0) + n
+    ranking = {p: i for i, (p, _) in enumerate(sorted(totals.items(), key=lambda kv: (-kv[1], kv[0])), 1)}
+
+    print(f"All data: {first:%Y-%m-%d} to {last:%Y-%m-%d}. Average over {len(full)} full months: "
+          + ", ".join(f"{m:%b %Y}" for m in full))
+    if partial:
+        print("Partial months, not in the average: " + ", ".join(f"{m:%b %Y}" for m in partial))
+    for code in codes:
+        key = part_key(code)
+        per_full = [counts[m].get(key, 0) for m in full]
+        total_all = sum(counts[m].get(key, 0) for m in months)
+        print(f"\n{key}")
+        if not total_all:
+            print("  Never asked in the data.")
+            continue
+        print(f"  Average per month: {sum(per_full) / len(full):.1f}")
+        if key in ranking:
+            print(f"  Rank by average:   {ranking[key]} of {len(ranking)} part numbers")
+        print(f"  Total asked:       {total_all} (all data)")
+        print("  Per month:         " + "  ".join(
+            f"{m:%b %Y}: {counts[m].get(key, 0)}{' (partial)' if m in partial else ''}"
+            for m in months if messages[m]))
+
+
+def average_report(db: Storage, chat_id: int, months: list[date], limit: int) -> str:
+    """Excel file ranking parts by average asks per month, over the months with full data.
+
+    Partial months (see classify_months) are shown in grey but not averaged.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    messages, counts, full, partial = classify_months(db, chat_id, months)
     for m in months:
         kind = "used" if m in full else ("partial, not used" if m in partial else "no data, not used")
         print(f"{m:%B %Y}: {messages[m]} messages ({kind})")
@@ -244,6 +296,8 @@ def main(argv: list[str]) -> None:
         print(f"\nSaved {name}")
         if os.name == "nt":
             os.startfile(name)
+    elif cmd == "avg" and args:
+        part_averages(db, chat_id, args)
     else:
         print(__doc__)
 
