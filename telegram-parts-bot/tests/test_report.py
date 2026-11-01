@@ -82,3 +82,23 @@ def test_part_averages(tmp_path, monkeypatch, capsys):
     assert "Apr 2026: 2 (partial)" in out
     assert "0450600115\n  Average per month: 1.0" in out
     assert "9999999999\n  Never asked in the data." in out
+
+
+def test_prefix_report(tmp_path, monkeypatch, capsys):
+    tz = ZoneInfo("Asia/Tehran")
+    monkeypatch.setattr(report, "TZ", tz)
+    db = Storage(str(tmp_path / "p.db"))
+    rows, mid = [], 0
+    for month in (1, 2):
+        for part, n in (("21910-2B500", 3), ("21910-3K000", 5), ("21911-2B500", 9), ("31910-2B500", 9)):
+            for k in range(n):
+                mid += 1
+                rows.append((-1, mid, k, "u", datetime(2026, month, 5, tzinfo=tz), "", [part]))
+    db.save_messages(rows)
+    report.prefix_report(db, -1, "21910", [], datetime(2026, 3, 1, tzinfo=tz))
+    out = capsys.readouterr().out
+    assert "starting with 21910 – all data: 2 found, 16 asks in total" in out
+    lines = [line.split() for line in out.splitlines() if line.strip()[:1].isdigit()]
+    assert lines == [["1", "219103K000", "10", "5", "5.0"], ["2", "219102B500", "6", "3", "3.0"]]
+    report.prefix_report(db, -1, "2191", ["2026-02-01", "2026-02-28"], datetime(2026, 3, 1, tzinfo=tz))
+    assert "2191 – 2026-02-01 → 2026-02-28: 3 found, 17 asks" in capsys.readouterr().out

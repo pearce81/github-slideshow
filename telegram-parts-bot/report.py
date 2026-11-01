@@ -9,6 +9,8 @@
     py report.py monthly 2025-11 2026-10 100   # top 100 for each month -> Excel file
     py report.py average 2025-11 2026-10 400   # top 400 by average asks per month -> Excel file
     py report.py avg 264102G000 23040-2C250    # average asks per month for these parts (all data)
+    py report.py prefix 21910                  # all parts starting with 21910, most asked first
+    py report.py prefix 21910 30d              # ...only counting the last 30 days
 
 Periods: today | yesterday | 24h | 7d | 30d | month | lastmonth | all | <N>d |
 YYYY-MM-DD [YYYY-MM-DD]
@@ -185,6 +187,39 @@ def part_averages(db: Storage, chat_id: int, codes: list[str]) -> None:
             for m in months if messages[m]))
 
 
+def prefix_report(db: Storage, chat_id: int, prefix: str, period: list[str], now: datetime) -> None:
+    """Print every part number starting with prefix, most asked first.
+
+    With no period: all data, plus the average per month over the full months.
+    """
+    key = part_key(prefix)
+    if period:
+        start, end, label, _ = parse_period(period, now)
+        avg = None
+    else:
+        oldest, newest = db.date_range(chat_id)
+        if oldest is None:
+            raise SystemExit("The database is empty.")
+        start = datetime.fromtimestamp(oldest, TZ)
+        end = datetime.fromtimestamp(newest + 1, TZ)
+        label = "all data"
+        months = month_starts(f"{start:%Y-%m}", f"{end:%Y-%m}")
+        _, counts, full, _ = classify_months(db, chat_id, months)
+        avg = lambda p: sum(counts[m].get(p, 0) for m in full) / len(full)  # noqa: E731
+
+    rows = [(p.replace("-", ""), n, users) for p, n, users in db.top_parts(chat_id, start, end, -1)
+            if p.replace("-", "").startswith(key)]
+    print(f"Part numbers starting with {key} – {label}: {len(rows)} found, "
+          f"{sum(n for _, n, _ in rows)} asks in total")
+    if not rows:
+        return
+    if avg:
+        print(f"(average per month over {len(full)} full months: " + ", ".join(f"{m:%b %Y}" for m in full) + ")")
+    print(f"\n  {'Rank':>4}  {'Part number':<12} {'Asked':>7} {'Users':>6}" + ("  Avg/month" if avg else ""))
+    for i, (p, n, users) in enumerate(rows, 1):
+        print(f"  {i:>4}  {p:<12} {n:>7} {users:>6}" + (f"  {avg(p):>9.1f}" if avg else ""))
+
+
 def average_report(db: Storage, chat_id: int, months: list[date], limit: int) -> str:
     """Excel file ranking parts by average asks per month, over the months with full data.
 
@@ -296,6 +331,8 @@ def main(argv: list[str]) -> None:
         print(f"\nSaved {name}")
         if os.name == "nt":
             os.startfile(name)
+    elif cmd == "prefix" and args:
+        prefix_report(db, chat_id, args[0], args[1:], now)
     elif cmd == "avg" and args:
         part_averages(db, chat_id, args)
     else:
