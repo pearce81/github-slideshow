@@ -100,3 +100,15 @@ def test_prefix_report(tmp_path, monkeypatch, capsys):
     assert lines == [["1", "219103K000", "10", "5", "5.0"], ["2", "219102B500", "6", "3", "3.0"]]
     out = report.prefix_report(db, -1, "2191", ["2026-02-01", "2026-02-28"], datetime(2026, 3, 1, tzinfo=tz))
     assert "2191 – 2026-02-01 → 2026-02-28: 3 found, 17 asks" in out
+
+
+def test_current_month_is_never_full(tmp_path, monkeypatch):
+    tz = ZoneInfo("Asia/Tehran")
+    monkeypatch.setattr(report, "TZ", tz)
+    now = datetime.now(tz)
+    db = Storage(str(tmp_path / "p.db"))
+    last_month = date(now.year - (now.month == 1), (now.month - 2) % 12 + 1, 1)
+    db.save_messages([(-1, i, i, "u", datetime.combine(m, datetime.min.time(), tz).replace(day=2), "", ["86511-2S000"])
+                      for i, m in enumerate([last_month] * 5 + [date(now.year, now.month, 1)] * 5)])
+    _, _, full, partial = report.classify_months(db, -1, [last_month, date(now.year, now.month, 1)])
+    assert full == [last_month] and partial == [date(now.year, now.month, 1)]

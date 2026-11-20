@@ -143,7 +143,8 @@ def classify_months(db: Storage, chat_id: int, months: list[date]):
 
     Returns (messages per month, part counts per month, full months, partial months).
     Months with no messages, or under half the messages of a typical (median) month,
-    are gaps in the recording and shouldn't count towards an average.
+    are gaps in the recording and shouldn't count towards an average. Neither should
+    the current month: it hasn't ended yet.
     """
     counts, messages = {}, {}
     for first in months:
@@ -153,8 +154,10 @@ def classify_months(db: Storage, chat_id: int, months: list[date]):
     with_data = sorted(m for m in months if messages[m])
     if not with_data:
         raise SystemExit("No messages in these months.")
-    typical = sorted(messages[m] for m in with_data)[len(with_data) // 2]
-    full = [m for m in with_data if messages[m] >= typical / 2]
+    now = datetime.now(TZ)
+    ended = [m for m in with_data if month_range(m)[1] <= now]
+    typical = sorted(messages[m] for m in ended or with_data)[len(ended or with_data) // 2]
+    full = [m for m in ended if messages[m] >= typical / 2]
     partial = [m for m in with_data if m not in full]
     return messages, counts, full, partial
 
